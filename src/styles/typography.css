@@ -89,6 +89,36 @@
     pre {
       @apply focus-visible:border-transparent focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-dashed;
     }
+
+    /* ===== KaTeX Math Rendering ===== */
+    .katex,
+    .katex-display,
+    .katex-display > .katex {
+      color: var(--foreground);
+    }
+
+    .katex-display {
+      @apply overflow-x-auto py-1;
+    }
+
+    .katex .mord,
+    .katex .mop,
+    .katex .mbin,
+    .katex .mrel,
+    .katex .mopen,
+    .katex .mclose,
+    .katex .mpunct,
+    .katex .minner,
+    .katex .mfrac,
+    .katex .sqrt > .root,
+    .katex .sqrt > .sqrt-line,
+    .katex .overline .overline-line,
+    .katex .underline .underline-line,
+    .katex .frac-line,
+    .katex .accent-body {
+      color: var(--foreground);
+      border-color: var(--foreground);
+    }
   }
 
   /* ===== Code Blocks & Syntax Highlighting ===== */

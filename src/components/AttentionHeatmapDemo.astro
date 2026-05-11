@@ -1,0 +1,159 @@
+---
+const tokenLabels = ["The", "model", "learns", "attention"];
+const matrix = [
+  [0.42, 0.28, 0.18, 0.12],
+  [0.19, 0.44, 0.24, 0.13],
+  [0.11, 0.21, 0.48, 0.2],
+  [0.14, 0.22, 0.29, 0.35],
+];
+---
+
+<div class="attention-demo not-prose">
+  <div class="attention-demo__header">
+    <h3>Interactive Attention Heatmap</h3>
+    <p>
+      Hover a row to see which tokens the selected token attends to. Darker cells =
+      stronger attention.
+    </p>
+  </div>
+
+  <div class="attention-demo__grid-wrap" aria-live="polite">
+    <table class="attention-demo__grid" data-attention-root>
+      <thead>
+        <tr>
+          <th scope="col">Query \ Key</th>
+          {tokenLabels.map(token => <th scope="col">{token}</th>)}
+        </tr>
+      </thead>
+      <tbody>
+        {matrix.map((row, rowIdx) => (
+          <tr data-row={rowIdx}>
+            <th scope="row">{tokenLabels[rowIdx]}</th>
+            {row.map((value, colIdx) => (
+              <td
+                data-value={value}
+                data-col={colIdx}
+                data-row={rowIdx}
+                style={`--alpha:${value};`}
+              >
+                {value.toFixed(2)}
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+
+  <p class="attention-demo__caption" data-attention-caption>
+    Select a row to inspect token-level focus.
+  </p>
+</div>
+
+<script is:inline>
+  const root = document.currentScript?.previousElementSibling;
+  if (root instanceof HTMLElement) {
+    const table = root.querySelector("[data-attention-root]");
+    const caption = root.querySelector("[data-attention-caption]");
+
+    if (table instanceof HTMLTableElement && caption instanceof HTMLElement) {
+      const rows = Array.from(table.querySelectorAll("tbody tr"));
+
+      const setActiveRow = rowIndex => {
+        rows.forEach((row, idx) => {
+          const active = idx === rowIndex;
+          row.toggleAttribute("data-active", active);
+        });
+
+        const token = rows[rowIndex]?.querySelector("th")?.textContent?.trim();
+        if (token) {
+          caption.textContent = `Selected query token: "${token}"`;
+        }
+      };
+
+      rows.forEach((row, rowIndex) => {
+        row.addEventListener("mouseenter", () => setActiveRow(rowIndex));
+        row.addEventListener("focusin", () => setActiveRow(rowIndex));
+      });
+
+      setActiveRow(0);
+    }
+  }
+</script>
+
+<style>
+  .attention-demo {
+    border: 1px solid var(--border);
+    border-radius: 1rem;
+    padding: 1rem;
+    background: var(--card-bg);
+    margin: 1.5rem 0;
+  }
+
+  .attention-demo__header h3 {
+    margin: 0;
+    font-size: 1.05rem;
+  }
+
+  .attention-demo__header p {
+    margin: 0.4rem 0 1rem;
+    font-size: 0.92rem;
+    opacity: 0.85;
+  }
+
+  .attention-demo__grid-wrap {
+    overflow-x: auto;
+  }
+
+  .attention-demo__grid {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0.35rem;
+    font-size: 0.88rem;
+  }
+
+  .attention-demo__grid th,
+  .attention-demo__grid td {
+    text-align: center;
+    padding: 0.45rem 0.6rem;
+    border-radius: 0.55rem;
+    transition: transform 140ms ease, box-shadow 140ms ease, background 140ms ease;
+  }
+
+  .attention-demo__grid thead th {
+    font-weight: 600;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+  }
+
+  .attention-demo__grid tbody th {
+    font-weight: 600;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  .attention-demo__grid td {
+    background: color-mix(in srgb, var(--link) calc(var(--alpha) * 70%), var(--card-bg));
+    border: 1px solid color-mix(in srgb, var(--link) 24%, var(--border));
+  }
+
+  .attention-demo__grid tbody tr[data-active="true"] td,
+  .attention-demo__grid tbody tr[data-active="true"] th {
+    transform: translateY(-1px);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--link) 25%, transparent),
+      0 8px 20px rgba(0, 0, 0, 0.08);
+  }
+
+  .attention-demo__caption {
+    margin: 0.85rem 0 0;
+    font-size: 0.85rem;
+    opacity: 0.9;
+  }
+
+  html[data-theme="dark"] .attention-demo__grid tbody tr[data-active="true"] td,
+  html[data-theme="dark"] .attention-demo__grid tbody tr[data-active="true"] th {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--link) 45%, transparent),
+      0 8px 20px rgba(0, 0, 0, 0.45);
+  }
+</style>
