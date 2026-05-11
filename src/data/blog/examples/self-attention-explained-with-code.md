@@ -12,8 +12,6 @@ tags:
 description: "EXAMPLE POST: A practical guide to self-attention with intuition, equations, and Python code snippets in NumPy and PyTorch."
 ---
 
-import AttentionHeatmapDemo from "@/components/AttentionHeatmapDemo.astro";
-
 Self-attention is the core idea behind Transformers. If you've ever wondered how a model decides which words to focus on while reading a sentence, this is it.
 
 In this post, we’ll build intuition first, then walk through code line by line.
@@ -28,12 +26,6 @@ That gives us two huge advantages:
 
 - Better long-range dependency handling
 - Full parallelism during training
-
-## Interactive illustration
-
-Here’s a small interactive attention heatmap embedded directly in the post:
-
-<AttentionHeatmapDemo />
 
 ## The core idea in one sentence
 
