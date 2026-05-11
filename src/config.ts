@@ -1,7 +1,7 @@
 export const SITE = {
-  website: "https://astro-paper.pages.dev/", // replace this with your deployed domain
+  website: "https://bstaber.github.io", // replace this with your deployed domain
   author: "Brian Staber",
-  profile: "https://satnaing.dev/",
+  profile: "https://www.github.com/btaber",
   desc: "Blog about AI and tech.",
   title: "The Missing Layer",
   ogImage: "astropaper-og.jpg",
@@ -14,7 +14,7 @@ export const SITE = {
   editPost: {
     enabled: true,
     text: "Edit page",
-    url: "https://github.com/satnaing/astro-paper/edit/main/",
+    url: "https://github.com/bstaber/the-missing-layer/",
   },
   dynamicOgImage: true,
   dir: "ltr", // "rtl" | "auto"
