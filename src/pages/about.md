@@ -3,4 +3,8 @@ layout: ../layouts/AboutLayout.astro
 title: "About"
 ---
 
-The missing layer.
+Hi, I’m [Brian](https://github.com/bstaber), a research engineer in AI for science.
+
+I use this blog to document what I’m learning — from fundamentals to practical experiments.
+
+Writing helps me think, test my understanding, and make progress.

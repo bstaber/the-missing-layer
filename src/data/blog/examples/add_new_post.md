@@ -1,7 +1,7 @@
 ---
 author: Sat Naing
 pubDatetime: 2022-09-23T15:22:00Z
-modDatetime: 2025-06-13T16:52:45.934Z
+modDatetime: 2026-05-11T14:06:20Z
 title: Adding new posts in AstroPaper theme
 slug: adding-new-posts-in-astropaper-theme
 featured: true
@@ -9,11 +9,10 @@ draft: false
 tags:
   - docs
 description:
-  Some rules & recommendations for creating or adding new posts using AstroPaperr
-  theme.
+  Some rules & recommendations for creating or adding new posts
 ---
 
-Here are some rules/recommendations, tips & ticks for creating new posts in AstroPaper blog theme.
+Here are some rules/recommendations, tips & ticks for creating new posts.
 
 <figure>
   <img
@@ -186,6 +185,44 @@ export default defineConfig({
   // ...
 }
 ```
+
+## Practical Examples (Python, Math, and Highlighted Code)
+
+If you don't want to keep standalone example posts, you can still keep a small reference section like this one.
+
+### Python code block
+
+```python
+def softmax(values):
+    total = sum(values)
+    return [value / total for value in values]
+```
+
+### LaTeX equations
+
+Inline math works like this: $\alpha = \frac{1}{\sqrt{d_k}}$.
+
+Block math works like this:
+
+$$
+\mathrm{Attention}(Q, K, V) = \mathrm{softmax}(QK^T / \sqrt{d_k}) V
+$$
+
+### Line/code highlighting
+
+AstroPaper supports Shiki notation comments like `# [!code highlight]`:
+
+```python
+import numpy as np
+
+Q = X @ W_q  # [!code highlight]
+K = X @ W_k  # [!code highlight]
+V = X @ W_v  # [!code highlight]
+
+scores = (Q @ K.T) / np.sqrt(Q.shape[-1])  # [!code highlight]
+```
+
+You can also use diff-like markers in code fences (`[!code ++]`, `[!code --]`) as shown in other sections of this guide.
 
 ## Storing Images for Blog Content
 
