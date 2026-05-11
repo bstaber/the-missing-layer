@@ -9,8 +9,7 @@ tags:
   - Transformers
   - Deep Learning
   - Python
-description:
-  "EXAMPLE POST: A practical guide to self-attention with intuition, equations, and Python code snippets in NumPy and PyTorch."
+description: "EXAMPLE POST: A practical guide to self-attention with intuition, equations, and Python code snippets in NumPy and PyTorch."
 ---
 
 import AttentionHeatmapDemo from "@/components/AttentionHeatmapDemo.astro";
@@ -59,7 +58,6 @@ Then attention scores are:
 $$
 \mathrm{Attention}(Q, K, V) = \mathrm{softmax}(QK^T / \sqrt{d_k}) V
 $$
-
 
 ## Minimal NumPy implementation
 
@@ -182,7 +180,7 @@ What to notice:
 
 ## Causal masking (decoder-style attention)
 
-In autoregressive generation, token *t* must not see future tokens `t+1...`.
+In autoregressive generation, token _t_ must not see future tokens `t+1...`.
 We use a lower-triangular mask:
 
 ```python

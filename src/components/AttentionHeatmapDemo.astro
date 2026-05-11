@@ -12,8 +12,8 @@ const matrix = [
   <div class="attention-demo__header">
     <h3>Interactive Attention Heatmap</h3>
     <p>
-      Hover a row to see which tokens the selected token attends to. Darker cells =
-      stronger attention.
+      Hover a row to see which tokens the selected token attends to. Darker
+      cells = stronger attention.
     </p>
   </div>
 
@@ -26,21 +26,23 @@ const matrix = [
         </tr>
       </thead>
       <tbody>
-        {matrix.map((row, rowIdx) => (
-          <tr data-row={rowIdx}>
-            <th scope="row">{tokenLabels[rowIdx]}</th>
-            {row.map((value, colIdx) => (
-              <td
-                data-value={value}
-                data-col={colIdx}
-                data-row={rowIdx}
-                style={`--alpha:${value};`}
-              >
-                {value.toFixed(2)}
-              </td>
-            ))}
-          </tr>
-        ))}
+        {
+          matrix.map((row, rowIdx) => (
+            <tr data-row={rowIdx}>
+              <th scope="row">{tokenLabels[rowIdx]}</th>
+              {row.map((value, colIdx) => (
+                <td
+                  data-value={value}
+                  data-col={colIdx}
+                  data-row={rowIdx}
+                  style={`--alpha:${value};`}
+                >
+                  {value.toFixed(2)}
+                </td>
+              ))}
+            </tr>
+          ))
+        }
       </tbody>
     </table>
   </div>
@@ -117,7 +119,10 @@ const matrix = [
     text-align: center;
     padding: 0.45rem 0.6rem;
     border-radius: 0.55rem;
-    transition: transform 140ms ease, box-shadow 140ms ease, background 140ms ease;
+    transition:
+      transform 140ms ease,
+      box-shadow 140ms ease,
+      background 140ms ease;
   }
 
   .attention-demo__grid thead th {
@@ -134,14 +139,19 @@ const matrix = [
   }
 
   .attention-demo__grid td {
-    background: color-mix(in srgb, var(--link) calc(var(--alpha) * 70%), var(--card-bg));
+    background: color-mix(
+      in srgb,
+      var(--link) calc(var(--alpha) * 70%),
+      var(--card-bg)
+    );
     border: 1px solid color-mix(in srgb, var(--link) 24%, var(--border));
   }
 
   .attention-demo__grid tbody tr[data-active="true"] td,
   .attention-demo__grid tbody tr[data-active="true"] th {
     transform: translateY(-1px);
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--link) 25%, transparent),
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--link) 25%, transparent),
       0 8px 20px rgba(0, 0, 0, 0.08);
   }
 
@@ -152,8 +162,13 @@ const matrix = [
   }
 
   html[data-theme="dark"] .attention-demo__grid tbody tr[data-active="true"] td,
-  html[data-theme="dark"] .attention-demo__grid tbody tr[data-active="true"] th {
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--link) 45%, transparent),
+  html[data-theme="dark"]
+    .attention-demo__grid
+    tbody
+    tr[data-active="true"]
+    th {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--link) 45%, transparent),
       0 8px 20px rgba(0, 0, 0, 0.45);
   }
 </style>
