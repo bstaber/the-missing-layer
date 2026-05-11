@@ -8,8 +8,7 @@ featured: true
 draft: false
 tags:
   - docs
-description:
-  Some rules & recommendations for creating or adding new posts
+description: Some rules & recommendations for creating or adding new posts
 ---
 
 Here are some rules/recommendations, tips & ticks for creating new posts.
