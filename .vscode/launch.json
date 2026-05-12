@@ -6,6 +6,22 @@
       "name": "Development server",
       "request": "launch",
       "type": "node-terminal"
+    },
+    {
+      "name": "Python: torchrun picotron (debugpy)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "torch.distributed.run",
+      "cwd": "${workspaceFolder}/python/tml",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      },
+      "args": [
+        "--nproc_per_node=8",
+        "playground/picotron.py"
+      ]
     }
   ]
 }
