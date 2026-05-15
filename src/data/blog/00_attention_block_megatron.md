@@ -246,6 +246,12 @@ The full code for this example is available [here](https://github.com/bstaber/th
 
 ## Row parallel linear layer
 
+Coming soon!
+
 ## Column + row parallel linear layer
 
+Coming soon!
+
 ## Tensor parallel transformer block
+
+Coming soon!
