@@ -61,12 +61,13 @@ layer = ColumnParallelLinear(
 Here, `config` is an object that contains the model parallel configuration. It has several attributes that we left at their default values. The `init_method` is a function that initializes the weights of the layer. And `gather_output` indicates whether we want to gather the output across devices or not. If `gather_output` is `False`, the output remains split across devices (column-wise), which can be useful for intermediate projections like in MHA. If `gather_output` is `True`, the output is gathered on all devices thanks to an `all_gather` operation.
 
 However, you can't run this code as is, because we need to initialiaze and define several things. You can try, but you'll get some nasty errors. We need to define:
+
 - the PyTorch distributed process group
 - the device to use for each process
 - Megatron-Core's parallel state
 - a random seed, required if you're using a GPU (`nccl` backend)
 
-Let's look at a full working example. I'll start by creating the layer, a fake input, and performing a forward pass. Then, I'll add a dummy loss and perform a backward pass, and finally compare the gradients with a non-parallel linear layer. A link to the full code will be provided at the end of the section. 
+Let's look at a full working example. I'll start by creating the layer, a fake input, and performing a forward pass. Then, I'll add a dummy loss and perform a backward pass, and finally compare the gradients with a non-parallel linear layer. A link to the full code will be provided at the end of the section.
 
 ```python
 import logging
@@ -173,9 +174,9 @@ All the specifics about Megatron-Core are highlighted, the rest is just the usua
 
 As you can see, the weight shape is `[384, 768]` instead of `[768, 768]`, which means that the weights are split across the two devices (column-wise). Each device has half of the output dimension. Note that the weight matrix is transposed inside the `ColumnParallelLinear` layer, and that's why the shape is `[384, 768]` instead of `[768, 384]`.
 
-The output shape of `y` is `[128, 32, 384]` instead of `[128, 32, 768]`, which means that the output is split across the two devices (column-wise) as well. This is expected becaause we set `gather_output=False` in the layer. The bias is `None` because we didn't specify a bias in the layer. 
+The output shape of `y` is `[128, 32, 384]` instead of `[128, 32, 768]`, which means that the output is split across the two devices (column-wise) as well. This is expected becaause we set `gather_output=False` in the layer. The bias is `None` because we didn't specify a bias in the layer.
 
-We could go even further: compute a loss, perform a backward pass, and compare the gradients with respect to a non-parallel linear layer. 
+We could go even further: compute a loss, perform a backward pass, and compare the gradients with respect to a non-parallel linear layer.
 
 Let's start by adding a dummy loss and log the gradients shape.
 
