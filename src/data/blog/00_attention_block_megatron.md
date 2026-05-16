@@ -256,3 +256,7 @@ Coming soon!
 ## Tensor parallel transformer block
 
 Coming soon!
+
+## Adding sequence parallelism
+
+Coming soon!
