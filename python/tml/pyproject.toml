@@ -7,7 +7,13 @@ authors = [
     { name = "Brian Staber", email = "brian.staber@gmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "absl-py>=2.4.0",
+    "einops>=0.8.2",
+    "megatron-core>=0.17.0",
+    "numpy>=2.4.4",
+    "torch>=2.11.0",
+]
 
 [build-system]
 requires = ["uv_build>=0.9.15,<0.10.0"]
