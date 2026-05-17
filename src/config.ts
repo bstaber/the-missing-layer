@@ -1,7 +1,7 @@
 export const SITE = {
-  website: "https://bstaber.github.io/the-missing-layer", // replace this with your deployed domain
+  website: "https://bstaber.github.io", // replace this with your deployed domain
   author: "Brian Staber",
-  profile: "https://www.github.com/btaber",
+  profile: "https://www.github.com/bstaber",
   desc: "Blog about AI and tech.",
   title: "The Missing Layer",
   ogImage: "astropaper-og.jpg",
