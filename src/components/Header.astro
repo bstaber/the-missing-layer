@@ -73,7 +73,7 @@ const isActive = (path: string) => {
       >
         <li class="col-span-2">
           <a
-            href={import.meta.env.BASE_URL + "posts"}
+            href={import.meta.env.BASE_URL + "/posts"}
             class:list={{ "active-nav": isActive("/posts") }}
           >
             Posts
@@ -81,7 +81,7 @@ const isActive = (path: string) => {
         </li>
         <li class="col-span-2">
           <a
-            href={import.meta.env.BASE_URL + "tags"}
+            href={import.meta.env.BASE_URL + "/tags"}
             class:list={{ "active-nav": isActive("/tags") }}
           >
             Tags
@@ -89,7 +89,7 @@ const isActive = (path: string) => {
         </li>
         <li class="col-span-2">
           <a
-            href={import.meta.env.BASE_URL + "about"}
+            href={import.meta.env.BASE_URL + "/about"}
             class:list={{ "active-nav": isActive("/about") }}
           >
             About
@@ -99,7 +99,7 @@ const isActive = (path: string) => {
           SITE.showArchives && (
             <li class="col-span-2">
               <LinkButton
-                href={import.meta.env.BASE_URL + "archives"}
+                href={import.meta.env.BASE_URL + "/archives"}
                 class:list={[
                   "focus-outline flex justify-center p-3 sm:p-1",
                   {
@@ -117,7 +117,7 @@ const isActive = (path: string) => {
         }
         <li class="col-span-1 flex items-center justify-center">
           <LinkButton
-            href={import.meta.env.BASE_URL + "search"}
+            href={import.meta.env.BASE_URL + "/search"}
             class:list={[
               "focus-outline flex p-3 sm:p-1",
               { "[&>svg]:stroke-accent": isActive("/search") },
