@@ -16,17 +16,17 @@ description: Implementing manifold constrained hyper-connections in transformer 
 
 In an attention block within a transformer architecture, we have a residual connection that connects the input of the block to its output. This can be represented as:
 
-$$ x_{\ell+1} = x_\ell + F(x_\ell) $$
+$$ x*{\ell+1} = x*\ell + F(x\_\ell) $$
 
 where $x_\ell$ is the input to the block, $F$ is the function representing the operations within the block (e.g., multi-head attention, feed-forward network), and $x_{\ell+1}$ is the output of the block.
 
 Hyper-connection can be seen as a generalization of this residual connection, where we have multiple connections from the input to the output, potentially with different weights. Let $n_{h_c}$ be the number of hyper-connections, and let $X_\ell$ be the matrix of inputs at layer $\ell$ with dimensions $n_{h_c} \times d$, where $d$ is the usual dimension of the features. The matrix $X_\ell$ can we be written as:
 
-$$ X_{\ell} = [X_{\ell, 1}, \dots, X_{\ell,n_{h_c}}]^T \in \mathbb{R}^{n_{h_c} \times d} $$
+$$ X*{\ell} = [X*{\ell, 1}, \dots, X*{\ell,n*{h*c}}]^T \in \mathbb{R}^{n*{h_c} \times d} $$
 
 where $X_{\ell, i}$ represents the $i$-th connection. In the hyper-connection framework, the output of the attention block is defined as:
 
-$$ X_{\ell+1} = B_\ell X_\ell + C_\ell F(A_\ell X_\ell) \in \mathbb{R}^{n_{h_c} \times d} $$
+$$ X*{\ell+1} = B*\ell X*\ell + C*\ell F(A*\ell X*\ell) \in \mathbb{R}^{n\_{h_c} \times d} $$
 
 Here, $A_\ell \in \mathbb{R}^{1 \times n_{h_c}}$, $B_\ell \in \mathbb{R}^{n_{h_c} \times n_{h_c}}$, and $C_\ell \in \mathbb{R}^{n_{h_c} \times 1}$ are learnable weight matrices that determine how the inputs are combined and how the function $F$ is applied to the inputs. Given the dimensions of these matrices, we can see that:
 
@@ -40,7 +40,7 @@ DeepSeek reported that while hyper-connections can improve model performance, th
 
 The idea of mHC is to constrain the mapping matrix $B_\ell$ so that its spectral norm is bounded by $1$. It is achieved by constructing $B_\ell$ such that it belongs to the set $\mathcal{M}$ given by:
 
-$$ \mathcal{M} = \{ B \in \mathbb{R}^{n \times n}\,|\, B\mathbf{1}_n = \mathbf{1}_n,\, \mathbf{1}_n^T B = \mathbf{1}_n^T,\, B \geq 0 \} $$.
+$$ \mathcal{M} = \{ B \in \mathbb{R}^{n \times n}\,|\, B\mathbf{1}\_n = \mathbf{1}\_n,\, \mathbf{1}\_n^T B = \mathbf{1}\_n^T,\, B \geq 0 \} $$.
 
 They say that this set is stable under multiplication, which means that we can stack multiple layers of mHC without worrying about the spectral norm growing too large. In addition, the input and output transforms $A_\ell$ and $C_\ell$ are also constrained to be non-negative.
 
