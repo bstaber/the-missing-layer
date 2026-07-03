@@ -1,3 +1,5 @@
+"""Official example: add function implemented in Triton."""
+
 import torch
 import triton
 import triton.language as tl
