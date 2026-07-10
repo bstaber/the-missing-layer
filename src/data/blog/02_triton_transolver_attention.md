@@ -136,7 +136,7 @@ Notice that both kernels perform exactly the same computation and process the sa
 
 # Triton tutorials
 
-There are several tutorials available on the Triton [website](https://triton-lang.org/main/getting-started/tutorials/index.html). It starts with a gentle vector addition, but it quickly jumps to fused softmax and matrix multiplication which I found not that easy for a beginner. I decided to introduce some intermediate examples between vector addition and the rest.
+There are several tutorials available on the Triton [website](https://triton-lang.org/main/getting-started/tutorials/index.html). It starts with a gentle vector addition, but it quickly jumps to fused softmax and matrix multiplication which I found not that easy for a beginner. I decided to introduce some intermediate examples such as copying a tensor and computing a dot product.
 
 ## Copy a tensor
 
@@ -212,3 +212,75 @@ def copy_kernel(
 As mentioned earlier, the last program is assigned a block of 1024 elements, but only the first `128` correspond to valid tensor elements. The remaining `896` are masked out. In order to avoid reading or writing past the end of the tensor, we define a mask that can be passed to triton's `load` and `store` functions. Every program executes exactly the same code. The only thing that changes from one program to another is its `program_id`.
 
 That's it for this simple copy kernel function.
+
+## Dot product
+
+The second example I'd like to go through is the dot product. In Triton's official documentation they start with the [vector addition](https://triton-lang.org/main/getting-started/tutorials/01-vector-add.html) which is quite similar. As in the previous example, we need to implement a Triton kernel, a `dot_product` helper function and check that it works as intended. The script does take the form:
+
+```python
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def dot_product_kernel(
+    x_ptr,
+    y_ptr,
+    output_ptr,
+    n_elements: int,
+    BLOCK_SIZE: tl.constexpr,
+):
+    ...
+
+def dot_product(
+    x: torch.Tensor,
+    y: torch.Tensor,
+) -> torch.Tensor:
+    assert x.ndim == 1 and y.ndim == 1
+    assert x.numel() == y.numel()
+    assert x.device == y.device
+
+    n_elements = x.numel()
+    num_programs = triton.cdiv(n_elements, meta["BLOCK_SIZE"])
+    partial_dot_products = torch.empty(num_programs, dtype=x.dtype, device=x.device)
+
+    grid = lambda meta: (
+        triton.cdiv(n_elements, meta["BLOCK_SIZE"]),
+    )
+    dot_product_kernel[grid](
+        x,
+        y,
+        partials,
+        n_elements,
+        BLOCK_SIZE=block_size,
+    )
+    
+    return partial_dot_products.sum()
+```
+
+In the kernel function, we essentially need to load the appropriate chunks of `x` and `y`, and compute their dot product. Hence, each entry in the output tensor will contain the dot products between the individual chunks of `x` and `y`. That's why we still need to return `output.sum()` in our helper function, and why the output tensor's length is equal to the number of programs. In other words, this implementation uses Triton for the first reduction stage and PyTorch for the final reduction.
+```python
+@triton.jit
+def dot_product_kernel(
+    x_ptr,
+    y_ptr,
+    output_ptr,
+    n_elements: int,
+    BLOCK_SIZE: tl.constexpr,
+):
+    pid = tl.program_id(axis=0)
+
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+
+    mask = offsets < n_elements
+
+    x = tl.load(x_ptr + offsets, mask)
+    y = tl.load(y_ptr + offsets, mask)
+
+    dot_product = tl.sum(x * y, axis=0)
+
+    tl.store(output_ptr + pid, dot_product)
+```
+
+Most of the kernel consists in loading `x` and `y`. Then we can Triton's built-in dot function to compute the dot product between the chunks of `x` and `y`. Finally, we store the scalar result into the output tensor using the simple offset given by the program id. 
