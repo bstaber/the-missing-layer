@@ -54,12 +54,12 @@ Summary:
 - **What is a SM**: An execution unit of the GPU. Each SM contains compute units (CUDA Cores, Tensor Cores, ...), warp schedulers, registers, and shared memory. A Triton program is scheduled as a unit onto one SM.
 - **What is a warp**: A group of 32 threads that execute the same instruction simultaneously
 - **Where do tensors live**: Tensors are stored in global memory (DRAM). During execution, their data may be cached in L2 cache or copied into shared memory and registers for faster access.
-- **What is a Triton program**: A Triton program is Triton's unit of work. One program typically computes one tile of the output. Programs are independent and are scheduled onto SMs by the GPU runtime.
+- **What is a Triton program**: A Triton program is Triton's unit of work. One program typically computes one tile of the output. Programs are independent and are scheduled onto SMs by the GPU runtime. More on that in the next section.
 - **Why can multiple programs run on the same SM**: An SM has enough registers and shared memory to host several programs simultaneously. While one program is waiting for data from memory, the SM can execute warps from another ready program, helping hide memory latency.
 
 ### Kernels in Triton and CUDA
 
-A Triton program is Triton's unit of work, analogous to a CUDA thread block. At runtime, each program is scheduled onto an SM, where it is executed by warps of GPU threads. **A Triton kernel is itself a collection of programs**. The number of programs is determined when launching the kernel (the grid). Each program processes a **tile** of data. The size of this tile is controlled by one or more compile-time parameters such as `BLOCK_SIZE`.
+A Triton program is Triton's unit of work. It is often compared to a CUDA thread block because both are scheduled as units onto an SM, although the programming models are different. At runtime, each program is scheduled onto an SM, where it is executed by warps of GPU threads. **A Triton kernel is itself a collection of programs**. The number of programs is determined when launching the kernel (the grid). Each program processes a **tile** of data. The size of this tile is controlled by one or more compile-time parameters such as `BLOCK_SIZE`.
 
 If you're new to CUDA and Triton, I feel that some terminology can be confusing. For instance, both have the notion of grid. In CUDA, the grid is a collection of blocks, and each block is a collection of threads. In Triton, the grid is a collection of programs, and each program is responsible for computing one tile of the computation (typically a tile of the output tensor).
 
@@ -134,7 +134,81 @@ Here, `program_id` tells us which program instance we are in. Instead of computi
 
 Notice that both kernels perform exactly the same computation and process the same chunks of the vector. The difference is the level of abstraction. In CUDA, we explicitly describe how individual threads cooperate to process those chunks. In Triton, we directly describe how one program processes a chunk (or tile), leaving the compiler to map that computation onto GPU threads and warps.
 
-### Triton tutorials
+# Triton tutorials
 
-- First tutorial: I was confused by the mask. It's useful because the last because n_elements usually is not an exact multiple of BLOCK_SIZE. So the last program might have a block that goes beyond the size of the arrays. Example: triton.cdiv(98432, 1024) = 97, and so the last program has block_start = 96 * 1024 = 98304 and offsets = 98304 + [0, 1, ..., 1023]. So this offset go from 98304 to 99327, but the valid indices are only: 0 to 98431. So you need the mask.
-- Second tutorial: need to understand SMs, registers, shared memory, warps, occupancy.
+There are several tutorials available on the Triton [website](https://triton-lang.org/main/getting-started/tutorials/index.html). It starts with a gentle vector addition, but it quickly jumps to fused softmax and matrix multiplication which I found not that easy for a beginner. I decided to introduce some intermediate examples between vector addition and the rest.
+
+## Copy a tensor
+
+Making a kernel that copies a tensor essentially essentially consists in loading a tensor and copy it back into some output tensor.
+
+Here's what this simple example tries to achieve:
+
+```python
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def copy_kernel(
+    x_ptr,
+    output_ptr,
+    n_elements: int,
+    BLOCK_SIZE: tl.constexpr,
+):
+    ...
+
+def copy_tensor(x: torch.Tensor):
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]),)
+    copy_kernel[grid](x, output, n_elements, BLOCK_SIZE=1024)
+
+    return output
+
+if __name__ == "__main__":
+    DEVICE = triton.runtime.driver.active.get_active_torch_device()
+    torch.manual_seed(0)
+
+    size = 98432
+    x = torch.rand(size, device=DEVICE)
+
+    output_torch = x.clone()
+    output_triton = copy_tensor(x)
+
+    print(torch.allclose(output_torch, output_triton))
+```
+
+Let's go through the code:
+
+- The function `copy_kernel` decorated with `@triton.jit` is our triton kernel. We will define in this function how each chunk of the input tensor is copied into the output tensor (recall that triton is tile-centric). The kernel needs to get the pointers of the arrays it's going to work with. Here, we need the pointer of the input array, `x_ptr`, and the pointer of the output array, `output_ptr`.
+
+- The `copy_tensor` function is a helper function that launches our kernel over a grid of blocks. We define a one-dimensional grid thanks to a tuple with a single element: ```(triton.cdiv(n_elements, meta["BLOCK_SIZE"]),)```. In our example, `n_elements = 98432` is not a multiple of `BLOCK_SIZE = 1024`, so we get a grid with `97` blocks which corresponds to `99328`, or in other terms, the last block has `896` elements that we don't need (`97 * 1024 - 98432 = 896`). We will deal these extra elements inside the kernel function. The grid is defined as a lambda function that can access all the input arguments given to the kernel through a dict `meta`. Finally, using this grid, we can launch the kernel function. Note that although we pass the PyTorch tensors `x` and `output`, Triton automatically extracts the underlying device pointers from the PyTorch tensors.
+
+- In the main body, we basically get the device on which we're running, apply our `copy_tensor` function, and check that it works as intended.
+
+Let's implement the kernel function. The main idea is the following. Each program launched by the our one-dimensional grid will copy one chunk of the input tensor into the output tensor. We define the chunk being processed by the program in terms of the program id and the chosen block size. For instance, the 'first' program in the grid will process the elements `0, ..., 1023`, the second program will process `1024, ..., 2047`, the k-th program will process the elements `k * 1024, ..., (k + 1) * 1024 - 1`, and so on.
+
+```python
+@triton.jit
+def copy_kernel(
+    x_ptr,
+    output_ptr,
+    n_elements: int,
+    BLOCK_SIZE: tl.constexpr,
+):
+    pid = tl.program_id(axis=0)
+
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+
+    mask = offsets < n_elements
+
+    x = tl.load(x_ptr + offsets, mask)
+    tl.store(output_ptr + offsets, x, mask)
+```
+
+As mentioned earlier, the last program is assigned a block of 1024 elements, but only the first `128` correspond to valid tensor elements. The remaining `896` are masked out. In order to avoid reading or writing past the end of the tensor, we define a mask that can be passed to triton's `load` and `store` functions. Every program executes exactly the same code. The only thing that changes from one program to another is its `program_id`.
+
+That's it for this simple copy kernel function.
