@@ -14,6 +14,10 @@ tags:
 description: Using triton to implement Transolver's physics attention
 ---
 
+<div class="not-prose my-6 rounded-lg border border-yellow-400 bg-yellow-50 px-4 py-3 text-yellow-900 dark:border-yellow-500/60 dark:bg-yellow-950/40 dark:text-yellow-100">
+  <strong>Work in progress.</strong> This post is still being written and may change. Working my way through some Triton tutorials and implementing a kernel for Transolver's physics attention.
+</div>
+
 # Introduction
 
 The goal of this note is to learn more about Triton by implementing a kernel for Transolver's physics-attention. At the time of writing, I barely know CUDA or Triton, and I've only come across a few Triton kernels in the context of scientific machine learning.
