@@ -1,7 +1,7 @@
 ---
 author: Brian Staber
-pubDatetime: 2026-06-29T21:25:52Z
-modDatetime: 2026-06-29T21:25:52Z
+pubDatetime: 2026-07-11T12:16:08Z
+modDatetime: 2026-07-11T12:16:08Z
 title: Triton kernel for physics-based attention
 slug: triton-kernel-for-physics-based-attention
 featured: false
