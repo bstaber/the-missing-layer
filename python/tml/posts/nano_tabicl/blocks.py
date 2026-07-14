@@ -3,6 +3,8 @@ import torch.nn as nn
 
 
 class TransformerBlock(nn.Module):
+    """Classic transformer block with optional cross attention."""
+
     def __init__(
         self,
         d_model: int,
@@ -43,6 +45,8 @@ class TransformerBlock(nn.Module):
 
 
 class InducedTransformerBlock(nn.Module):
+    """Transformer block with induced tokens."""
+
     def __init__(
         self,
         d_model: int,
@@ -53,15 +57,20 @@ class InducedTransformerBlock(nn.Module):
     ):
         super().__init__()
 
+        # Learnable inducing tokens / queries that summarize the input sequence
         self.inducing_tokens = nn.Parameter(
             0.02 * torch.randn(1, num_inducing, d_model)
         )
+
+        # Transformer block that compresses the input sequence by attending to the inducing tokens
         self.compress_block = TransformerBlock(
             d_model,
             num_heads,
             mlp_ratio,
             dropout,
         )
+
+        # Transformer block that decompresses to the original sequence length
         self.decompress_block = TransformerBlock(
             d_model,
             num_heads,
@@ -74,12 +83,20 @@ class InducedTransformerBlock(nn.Module):
         x: torch.Tensor,
         context: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        """Forward pass of the induced transformer block."""
         batch_size = x.shape[0]
 
         q = self.inducing_tokens.expand(batch_size, -1, -1)
         source = context if context is not None else x
 
+        # q: (batch_size, num_inducing, d_model)
+        # source: (batch_size, seq_len, d_model)
+        # z: (batch_size, num_inducing, d_model)
         z = self.compress_block(q, source)
+
+        # z: (batch_size, num_inducing, d_model)
+        # x: (batch_size, seq_len, d_model)
+        # out: (batch_size, seq_len, d_model)
         out = self.decompress_block(x, z)
 
         return out
