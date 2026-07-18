@@ -239,18 +239,21 @@ def dot_product_kernel(
 def dot_product(
     x: torch.Tensor,
     y: torch.Tensor,
+    block_size: int = 1024,
 ) -> torch.Tensor:
     assert x.ndim == 1 and y.ndim == 1
-    assert x.numel() == y.numel()
+    assert x.shape == y.shape
     assert x.device == y.device
+    assert x.dtype == y.dtype
+    assert x.is_contiguous() and y.is_contiguous()
+    assert x.dtype == torch.float32
 
     n_elements = x.numel()
-    num_programs = triton.cdiv(n_elements, meta["BLOCK_SIZE"])
+    num_programs = triton.cdiv(n_elements, block_size)
     partial_dot_products = torch.empty(num_programs, dtype=x.dtype, device=x.device)
 
-    grid = lambda meta: (
-        triton.cdiv(n_elements, meta["BLOCK_SIZE"]),
-    )
+    grid = (num_programs,)
+
     dot_product_kernel[grid](
         x,
         y,
@@ -279,12 +282,22 @@ def dot_product_kernel(
 
     mask = offsets < n_elements
 
-    x = tl.load(x_ptr + offsets, mask)
-    y = tl.load(y_ptr + offsets, mask)
+    x = tl.load(x_ptr + offsets, mask, other=0.0)
+    y = tl.load(y_ptr + offsets, mask, other=0.0)
 
     dot_product = tl.sum(x * y, axis=0)
 
     tl.store(output_ptr + pid, dot_product)
 ```
 
-Most of the kernel consists in loading `x` and `y`. Then we can Triton's built-in dot function to compute the dot product between the chunks of `x` and `y`. Finally, we store the scalar result into the output tensor using the simple offset given by the program id. 
+Most of the kernel consists in loading `x` and `y`. Then we can Triton's built-in `sum` function to compute the dot product between the chunks of `x` and `y`. Finally, we store the scalar result into the output tensor using the simple offset given by the program id. This function is not a complete GPU-only dot-product implementation:
+
+- Each Triton program reduces one tile into one partial scalar.
+- The partial scalars are stored in GPU memory.
+- `partial_dot_products.sum()` launches a PyTorch reduction to obtain the final scalar.
+
+A later extension could implement the second reduction in Triton or use an atomic addition, although atomics introduce their own performance and numerical considerations
+
+<div class="not-prose my-6 rounded-lg border border-yellow-400 bg-yellow-50 px-4 py-3 text-yellow-900 dark:border-yellow-500/60 dark:bg-yellow-950/40 dark:text-yellow-100">
+  Work in progress: we will dive into fused softmax and matrix multiplication soon, and then implement Transolver's physics attention kernel.
+</div>
