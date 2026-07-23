@@ -91,31 +91,43 @@ $$
 The result has shape `(batch * columns, rows, d_model)` and is rearranged back to `(batch, rows, columns, d_model)`.
 
 <div class="not-prose my-6 rounded-lg border border-yellow-400 bg-yellow-50 px-4 py-3 text-yellow-900 dark:border-yellow-500/60 dark:bg-yellow-950/40 dark:text-yellow-100">
-  <strong>Side note.</strong> I think that this kind of block is also called ISAB (Induced Set Attention Block), introduced the 
+  <strong>Side note.</strong> I think that this kind of block is also called ISAB (Induced Set Attention Block), introduced in the 
   <a
   href="https://proceedings.mlr.press/v97/lee19d/lee19d.pdf"
   target="_blank"
   rel="noopener noreferrer"
   class="underline"
 >
-  Set Transformer paper.
+Set Transformer paper.
 </a>
-   The learnable latent queries also exist in the 
-  <a
+The learnable latent queries also exist in the 
+<a
     href="https://proceedings.mlr.press/v139/jaegle21a/jaegle21a.pdf"
     target="_blank"
     rel="noopener noreferrer"
     class="underline"
-  >Perceiver paper</a> architecture introduced by DeepMind. But the Perceiver block the Perceiver applies several self-attention layers in latent space while ISAB immediately projects information back to the original space.
+  >Perceiver paper</a> architecture introduced by DeepMind. Unlike ISAB, the Perceiver applies several self-attention layers in the latent space before optionally projecting the information back to the inputs (Perceiver IO).
 </div>
 
 ## Row attention 
 
-TBD.
+After several column attention blocks, the features pass through several row attention blocks. Row attention is essentially multi-head self-attention applied to each row independently. At this stage, the tensor has a shape `(batch, rows, columns, d_model)` and it is reshaped into `(batch * rows, columns, d_model), making the columns the sequence dimension.
+
+Unlike column attention, no inducing points are used. Since tabular datasets contain far fewer columns than rows, the quadratic complexity of self-attention remains manageable. This allows the model to directly capture interactions between the features of each individual sample. After the attention and feed-forward layers, the tensor is reshaped back to `(batch, rows, columns, d_model)` before being passed to the next block.
+
+The row attention block is thus identical to a standard Transformer encoder block (multi-head self-attention + residual connections + layer normalization + feed-forward network), except that it operates independently on each row after reshaping.
+
+Each row attention block processes not only the feature tokens but also a small number of learnable CLS tokens appended to every row. These tokens aggregate information from all feature tokens through self-attention. After the final row attention block, only the CLS representations are kept, producing a tensor of shape `(batch, rows, d_model)`. These row-level representations are then fed to the ICL transformer.
 
 ## ICL attention
 
-TBD.
+After the row attention stage, every row is represented by a single embedding summarizing all its features. The goal of the ICL stage is to allow test examples to retrieve useful information from the labeled training examples.
+
+The feature tensor has hape `(batch, rows, d_model)`. Unlike the previous attention blocks, the rows are not processed independently, instead, attention is applied across the rows themselves. And since the labels of the test rows are unknown, information should only flow from the training rows toward the test rows. In other words, the keys and values are restricted to the training rows, and during the final ICL block, only the test rows are queried.
+
+## Full picture
+
+That's it for the principal architecture: feature grouping, induced column attention, row attention, and dataset-wise ICL attention. But there are other details worth mentioning: QSSMAX, multiple row-level CLS tokens, labels injected twice, column attention reads only the training rows, the final ICL block is asymmetric.
 
 # Implementation
 
