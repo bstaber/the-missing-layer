@@ -32,8 +32,6 @@ I think that the architecture can be divided into the following main steps:
 4. ICL blocks: several self-attention blocks again but those perform ICL
 5. Final output projection
 
-There are additional details such as RoPE, multiple CLS tokens, QASSMax (a scalable softmax).
-
 It was follows, I will focus on regression.
 
 ## Feature grouping
@@ -117,7 +115,9 @@ Unlike column attention, no inducing points are used. Since tabular datasets con
 
 The row attention block is thus identical to a standard Transformer encoder block (multi-head self-attention + residual connections + layer normalization + feed-forward network), except that it operates independently on each row after reshaping.
 
-Each row attention block processes not only the feature tokens but also a small number of learnable CLS tokens appended to every row. These tokens aggregate information from all feature tokens through self-attention. After the final row attention block, only the CLS representations are kept, producing a tensor of shape `(batch, rows, d_model)`. These row-level representations are then fed to the ICL transformer.
+Before entering the first row attention block, four learnable `[CLS]` tokens are prepended to every row. These tokens are concatenated with the feature representations produced by the column transformer, yielding a sequence of columns + 4 tokens for each row. The row attention blocks jointly process the feature and `[CLS]` tokens, allowing the latter to aggregate information from all features through self-attention.
+
+After the final row attention block, only the four `[CLS]` representations are kept and concatenated, producing a tensor of shape `(batch, rows, 4 * d_model)`, which is passed to the ICL transformer.
 
 ## ICL attention
 
@@ -125,9 +125,14 @@ After the row attention stage, every row is represented by a single embedding su
 
 The feature tensor has hape `(batch, rows, d_model)`. Unlike the previous attention blocks, the rows are not processed independently, instead, attention is applied across the rows themselves. And since the labels of the test rows are unknown, information should only flow from the training rows toward the test rows. In other words, the keys and values are restricted to the training rows, and during the final ICL block, only the test rows are queried.
 
-## Full picture
+## Addtional perks
 
-That's it for the principal architecture: feature grouping, induced column attention, row attention, and dataset-wise ICL attention. But there are other details worth mentioning: QSSMAX, multiple row-level CLS tokens, labels injected twice, column attention reads only the training rows, the final ICL block is asymmetric.
+That's it for the principal architecture: feature grouping, induced column attention, row attention, and dataset-wise ICL attention. But there are other details worth mentioning: 
+- **QASSMax** (Query-Aware Scalable Softmax). Used in the column and ICL transformer blocks, QASSMax modifies the query vectors with a learnable transformation before computing attention. The transformation depends on both the context size and the query content, allowing the model to adapt the effective attention temperature and maintain sharp attention distributions when processing datasets of varying sizes.
+- **Multiple row-level `[CLS]` tokens**: I mentioned this in the above sections but it's worth emphasizing again that instead of using a single `[CLS]` token to aggregate the feature representations of a row, TabICLv2 prepends four learnable `[CLS]` tokens to each row before the row transformer.
+- **Labels injected twice**: I didn't really mention this clearly in the above section, I think. Training labels are incorporated at two stages of the network. They are first embedded and added to the input feature embeddings before the column and row transformers, allowing the row representations to encode feature-label relationships. The labels are then embedded again before the ICL transformer so that dataset-level attention has direct access to the supervision signal when retrieving relevant training examples.
+- **Column attention reads only the training rows**: The column transformer is applied exclusively to the labeled training rows. Since this stage performs attention across the row dimension, excluding the test rows reduces computation while still allowing them to retrieve information from the encoded training set during the subsequent ICL stage. I think that this was not the case in the first version of TabICL.
+- **The final ICL block is asymmetric**: The last ICL block is implemented as cross-attention rather than self-attention: only the test-row representations are used as queries, while the training-row representations provide the keys and values. Since the model only needs to produce predictions for the test rows, this avoids unnecessary computation on the training rows.
 
 # Implementation
 
