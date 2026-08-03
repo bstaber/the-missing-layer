@@ -15,13 +15,17 @@ class TinyTabICL(nn.Module):
         num_row_blocks: int = 3,
         num_icl_blocks: int = 3,
         num_inducing: int = 128,
+        num_cls_cols: int = 4,
         feature_group_size: int = 3,
     ):
         super().__init__()
         self.feature_group_size = feature_group_size
+        icl_dim = d_model * num_cls_cols
+        self.num_cls_cols = num_cls_cols
 
         self.proj_x = nn.Linear(feature_group_size, d_model)
         self.proj_y = nn.Linear(1, d_model)
+        self.proj_y_icl = nn.Linear(1, icl_dim)
 
         self.col_blocks = nn.ModuleList(
             InducedTransformerBlock(
@@ -46,7 +50,7 @@ class TinyTabICL(nn.Module):
 
         self.icl_blocks = nn.ModuleList(
             TransformerBlock(
-                d_model=d_model,
+                d_model=icl_dim,
                 num_heads=num_heads_icl,
                 mlp_ratio=4.0,
                 dropout=0.0,
@@ -55,12 +59,10 @@ class TinyTabICL(nn.Module):
         )
 
         self.row_cls_tokens = nn.Parameter(
-            0.02 * torch.randn(1, 1, num_inducing, d_model)
+            0.02 * torch.randn(1, 1, num_cls_cols, d_model)
         )
 
         self.row_norm = nn.LayerNorm(d_model)
-
-        icl_dim = d_model * num_inducing
         self.out_norm = nn.LayerNorm(icl_dim)
         self.out_mlp = nn.Sequential(
             nn.Linear(icl_dim, icl_dim * 2),
@@ -92,27 +94,64 @@ class TinyTabICL(nn.Module):
         x_proj[:, :num_train] += self.proj_y(y[:, :, None, None])
 
         # Column blocks
+        # (batch, rows, columns, d_model)
+        # -> (batch, columns, rows, d_model)
+        # -> (batch * columns, rows, d_model)
+
+        x_proj = x_proj.permute(0, 2, 1, 3).reshape(
+            batch_size * num_cols,
+            num_rows,
+            -1,
+        )
+
         for block in self.col_blocks:
-            x_proj = block(
-                x_proj
-            )  # missing feature: all rows only attend to training rows
+            train_context = x_proj[:, :num_train]
+            x_proj = block(x_proj, train_context)
+
+        x_proj = x_proj.reshape(
+            batch_size,
+            num_cols,
+            num_rows,
+            -1,
+        ).permute(0, 2, 1, 3)
 
         # Row blocks
         x_proj = torch.cat(
             [self.row_cls_tokens.expand(batch_size, num_rows, -1, -1), x_proj], dim=2
         )
+
+        num_tokens = self.num_cls_cols + num_cols
+        x_proj = x_proj.reshape(
+            batch_size * num_rows,
+            num_tokens,
+            -1,
+        )
+
         for block in self.row_blocks[:-1]:
             x_proj = block(x_proj)
-        x_proj = self.row_blocks(
-            x_proj
-        )  # missing feature: need only the cls token values
+
+        cls_queries = x_proj[:, : self.num_cls_cols]
+        x_proj = self.row_blocks[-1](cls_queries, x_proj)
+
+        x_proj = x_proj.reshape(
+            batch_size,
+            num_rows,
+            self.num_cls_cols,
+            -1,
+        )
         x_proj = self.row_norm(x_proj).flatten(-2, -1)
 
         # ICL blocks
         x_proj[:, :num_train] += self.proj_y_icl(y[:, :, None])
         for block in self.icl_blocks[:-1]:
-            x_proj = block(x)  # missing feature: all rows only attend to training rows
-        x_proj = self.row_blocks[-1](x_proj[:, num_train:], x_proj[:, :num_train])
+            x_proj = block(
+                x_proj,
+                x_proj[:, :num_train],
+            )
+        x_proj = self.icl_blocks[-1](
+            x_proj[:, num_train:],
+            x_proj[:, :num_train],
+        )
 
         # Out projection
         return self.out_mlp(self.out_norm(x_proj))
