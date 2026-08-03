@@ -20,10 +20,13 @@ class TinyTabICL(nn.Module):
     ):
         super().__init__()
         self.feature_group_size = feature_group_size
-        icl_dim = d_model * num_cls_cols
         self.num_cls_cols = num_cls_cols
 
+        icl_dim = d_model * num_cls_cols
+
         self.proj_x = nn.Linear(feature_group_size, d_model)
+
+        # Labels are injected both before the column transformer and before ICL
         self.proj_y = nn.Linear(1, d_model)
         self.proj_y_icl = nn.Linear(1, icl_dim)
 
@@ -58,6 +61,7 @@ class TinyTabICL(nn.Module):
             for _ in range(num_icl_blocks)
         )
 
+        # These tokens will summarize the features of each row, the paper uses 4 CLS tokens
         self.row_cls_tokens = nn.Parameter(
             0.02 * torch.randn(1, 1, num_cls_cols, d_model)
         )
@@ -79,7 +83,7 @@ class TinyTabICL(nn.Module):
                 f"Batch-size mismatch: x has {batch_size}, y has {y_batch_size}."
             )
 
-        # Normalization
+        # Normalization, use only the training rows for statistics (ofc)
         x = (x - x[:, :num_train].mean(dim=1, keepdim=True)) / (
             x[:, :num_train].std(dim=1, unbiased=False, keepdim=True) + 1e-8
         )
@@ -94,15 +98,12 @@ class TinyTabICL(nn.Module):
             dim=-1,
         )
 
-        # Input projections
+        # Embedding and label injection
         x_proj = self.proj_x(x)
         x_proj[:, :num_train] += self.proj_y(y[:, :, None, None])
 
-        # Column blocks
-        # (batch, rows, columns, d_model)
-        # -> (batch, columns, rows, d_model)
-        # -> (batch * columns, rows, d_model)
-
+        # Column attention
+        ## Reshape for column attention
         x_proj = x_proj.permute(0, 2, 1, 3).reshape(
             batch_size * num_cols,
             num_rows,
@@ -110,9 +111,11 @@ class TinyTabICL(nn.Module):
         )
 
         for block in self.col_blocks:
+            # All rows are queried, but the inducing tokens summarize training rows only
             train_context = x_proj[:, :num_train]
             x_proj = block(x_proj, train_context)
 
+        ## Reshape back
         x_proj = x_proj.reshape(
             batch_size,
             num_cols,
@@ -120,11 +123,14 @@ class TinyTabICL(nn.Module):
             -1,
         ).permute(0, 2, 1, 3)
 
-        # Row blocks
+        # Row attention
+        ## Add learnable tokens that will summarize each row
         x_proj = torch.cat(
-            [self.row_cls_tokens.expand(batch_size, num_rows, -1, -1), x_proj], dim=2
+            [self.row_cls_tokens.expand(batch_size, num_rows, -1, -1), x_proj],
+            dim=2,
         )
 
+        ## Reshape for row attention
         num_tokens = self.num_cls_cols + num_cols
         x_proj = x_proj.reshape(
             batch_size * num_rows,
@@ -135,28 +141,37 @@ class TinyTabICL(nn.Module):
         for block in self.row_blocks[:-1]:
             x_proj = block(x_proj)
 
+        ## In the last block, only the CLS tokens need updated representations
         cls_queries = x_proj[:, : self.num_cls_cols]
         x_proj = self.row_blocks[-1](cls_queries, x_proj)
 
+        ## Reshape back
         x_proj = x_proj.reshape(
             batch_size,
             num_rows,
             self.num_cls_cols,
             -1,
         )
+
+        ## Concatenate the CLS tokens into one fixed-size row representation
         x_proj = self.row_norm(x_proj).flatten(-2, -1)
 
-        # ICL blocks
+        # ICL attention
+        ## Inject labels again at the dimension used by the ICL transformer
         x_proj[:, :num_train] += self.proj_y_icl(y[:, :, None])
+
         for block in self.icl_blocks[:-1]:
+            # Every row is queried, but only training rows provide keys and values
             x_proj = block(
                 x_proj,
                 x_proj[:, :num_train],
             )
+
+        ## The final block only computes representations for the test rows
         x_proj = self.icl_blocks[-1](
             x_proj[:, num_train:],
             x_proj[:, :num_train],
         )
 
-        # Out projection
+        # Output projection
         return self.out_mlp(self.out_norm(x_proj))
