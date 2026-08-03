@@ -72,7 +72,12 @@ class TinyTabICL(nn.Module):
 
     def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         batch_size, num_rows, num_cols = x.shape
-        batch_size, num_train = y.shape
+        y_batch_size, num_train = y.shape
+
+        if y_batch_size != batch_size:
+            raise ValueError(
+                f"Batch-size mismatch: x has {batch_size}, y has {y_batch_size}."
+            )
 
         # Normalization
         x = (x - x[:, :num_train].mean(dim=1, keepdim=True)) / (
