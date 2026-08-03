@@ -4,6 +4,8 @@ from tml.nano_tabicl.blocks import InducedTransformerBlock, TransformerBlock
 
 
 class TinyTabICL(nn.Module):
+    """Tiny squeezy TabICL model."""
+
     def __init__(
         self,
         out_dim: int,
@@ -175,3 +177,31 @@ class TinyTabICL(nn.Module):
 
         # Output projection
         return self.out_mlp(self.out_norm(x_proj))
+
+
+if __name__ == "__main__":
+    torch.manual_seed(0)
+
+    batch_size = 2
+    num_train = 16
+    num_test = 8
+    num_cols = 5
+    out_dim = 1
+
+    model = TinyTabICL(
+        out_dim=out_dim,
+        d_model=32,
+    )
+
+    x = torch.randn(batch_size, num_train + num_test, num_cols)
+    y = torch.randn(batch_size, num_train)
+
+    predictions = model(x, y)
+
+    expected_shape = (batch_size, num_test, out_dim)
+    assert predictions.shape == expected_shape, (
+        f"Expected shape {expected_shape}, got {predictions.shape}."
+    )
+
+    loss = predictions.square().mean()
+    loss.backward()
