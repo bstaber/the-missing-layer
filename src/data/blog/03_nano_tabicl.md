@@ -14,13 +14,33 @@ description: Understanding the building blocks of TabICL v2
 ---
 
 # Introduction
-Tabular foundation models (TFMs) are attracting a lot of attention (no pun intended). In this post, I want to understand what happens under the hood of TabICLv2, an open-source TFM developed by the SODA team at Inria. Other models, such as TabPFN from Prior Labs, follow the same broad idea: pretrain a Transformer on millions of synthetic tabular prediction tasks, then use in-context learning to solve a new task without updating the model's weights.
+Tabular foundation models (TFMs) are attracting a lot of attention (no pun intended). In this post, I want to understand what happens under the hood of [TabICLv2](https://www.alphaxiv.org/abs/2602.11139), an open-source TFM developed by the SODA team at Inria. Other models, such as TabPFN from Prior Labs, follow the same broad idea: pretrain a Transformer on millions of synthetic tabular prediction tasks, then use in-context learning to solve a new task without updating the model's weights.
 
 At inference time, the model receives the labeled training rows as context and predicts the labels or target values of unseen rows. The model conditions on an entire training set, but it does not run gradient descent or fit new parameters for that dataset. TabICLv2 supports classification and regression and handles numerical and categorical features, missing values, and outliers.
 
 My goal here is not to reproduce the full system. I will implement a small version of its three-stage architecture: a column encoder, a row encoder, and a dataset-wise Transformer that performs in-context learning. I will then train it on a controlled synthetic prior and test whether it actually learns to make better predictions as the context set grows.
 
 I used the official [NanoTabICL](https://github.com/soda-inria/nanotabicl/) and [TabICL](https://github.com/soda-inria/tabicl) implementations to understand what's going on. 
+
+# Formal definition
+
+TabICL and TabPFN are Prior-Fitted Networks (PFNs). Prior-Fitted Networks were, to the best of my knowledge, introduced by [Transformers Can Do Bayesian Inference](https://openreview.net/forum?id=KSugKcbNf9). It was further developped in [TabPFN: A Transformer That Solves Small Tabular Classification Problems in a Second](https://openreview.net/forum?id=cp5PvcI6w8_), and [TabICL: A Tabular Foundation Model for In-Context Learning](https://arxiv.org/abs/2505.19307).
+
+The key idea is to train a transformer on millions of synthetic datasets sampled from a prior distribution over tabular tasks. Assume that datasets are generated as 
+
+$$
+f \sim p(f), \quad \mathcal{D} = \{(x_i, y_i)\}_{i=1}^N, \quad y_i = f(x_i) + \epsilon\,.
+$$
+
+The quantity we care about when predicting a new point is the posterior predictive distribution (PPD)
+
+$$
+p(y^{\star} | x^{\star}, \mathcal{D}) = \int p(y^{\star} | x^{\star}, f) p(f | \mathcal{D}) df\,,
+$$
+
+where $p(f | \mathcal{D})$ is the posterior distribution over functions given the training data. The PPD is intractable in general, but we can approximate it with a transformer trained to predict $y^{\star}$ given $x^{\star}$ and $\mathcal{D}$. The transformer learns to perform Bayesian inference by conditioning on the training set and producing predictions for new inputs.
+
+For more details, I recommend reading the original papers and the recent technical reports.
 
 # Architecture
 
@@ -136,7 +156,116 @@ That's it for the principal architecture: feature grouping, induced column atten
 
 # Implementation
 
-TBD.
+## Column attention with inducing points
+
+As described above, the column attention block is implemented as a Transformer block with inducing points. The following code snippet shows how to implement this block in PyTorch.
+
+```python
+class InducedTransformerBlock(nn.Module):
+    """Transformer block with induced tokens."""
+
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        num_inducing: int,
+        mlp_ratio: float,
+        dropout: float = 0.0,
+    ):
+        super().__init__()
+
+        # Learnable inducing tokens / queries that summarize the input sequence
+        self.inducing_tokens = nn.Parameter(
+            0.02 * torch.randn(1, num_inducing, d_model)
+        )
+
+        # Transformer block that compresses the input sequence by attending to the inducing tokens
+        self.compress_block = TransformerBlock(
+            d_model,
+            num_heads,
+            mlp_ratio,
+            dropout,
+        )
+
+        # Transformer block that decompresses to the original sequence length
+        self.decompress_block = TransformerBlock(
+            d_model,
+            num_heads,
+            mlp_ratio,
+            dropout,
+        )
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        context: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Forward pass of the induced transformer block."""
+        batch_size = x.shape[0]
+
+        q = self.inducing_tokens.expand(batch_size, -1, -1)
+        source = context if context is not None else x
+
+        # q: (batch_size, num_inducing, d_model)
+        # source: (batch_size, seq_len, d_model)
+        # z: (batch_size, num_inducing, d_model)
+        z = self.compress_block(q, source)
+
+        # z: (batch_size, num_inducing, d_model)
+        # x: (batch_size, seq_len, d_model)
+        # out: (batch_size, seq_len, d_model)
+        out = self.decompress_block(x, z)
+
+        return out
+```
+
+## Row and ICL attention
+
+Row attention is implemented as a standard Transformer block. The ICL attention is also implemented as a Transformer block, but it can optionally take a context tensor to perform cross-attention. The following code snippet shows how to implement these blocks in PyTorch.
+
+```python
+class TransformerBlock(nn.Module):
+    """Classic transformer block with optional cross attention."""
+
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        mlp_ratio: float,
+        dropout: float = 0.0,
+    ):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.attn = nn.MultiheadAttention(d_model, num_heads, dropout, batch_first=True)
+
+        hidden_dim = int(mlp_ratio * d_model)
+        self.ffn = nn.Sequential(
+            nn.Linear(d_model, hidden_dim), nn.GELU(), nn.Linear(hidden_dim, d_model)
+        )
+
+    def forward(
+        self, x: torch.Tensor, context: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        q = self.norm1(x)
+
+        if context is None:
+            kv = q
+        else:
+            kv = self.norm1(context)
+
+        attn_output, _ = self.attn(
+            q,
+            kv,
+            kv,
+            need_weights=False,
+        )
+        x = x + attn_output
+
+        x = x + self.ffn(self.norm2(x))
+        return x
+```
+
 
 # Training this tiny TabICL with my own prior data
 
