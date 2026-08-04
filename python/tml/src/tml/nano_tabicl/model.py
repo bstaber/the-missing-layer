@@ -1,0 +1,208 @@
+import torch
+import torch.nn as nn
+
+from tml.nano_tabicl.blocks import InducedTransformerBlock, TransformerBlock
+
+
+class TinyTabICL(nn.Module):
+    """Tiny squeezy TabICL model."""
+
+    def __init__(
+        self,
+        out_dim: int,
+        d_model: int = 128,
+        num_heads_col: int = 8,
+        num_heads_row: int = 8,
+        num_heads_icl: int = 8,
+        num_col_blocks: int = 3,
+        num_row_blocks: int = 3,
+        num_icl_blocks: int = 3,
+        num_inducing: int = 128,
+        num_cls_cols: int = 4,
+        feature_group_size: int = 3,
+    ):
+        super().__init__()
+        self.feature_group_size = feature_group_size
+        self.num_cls_cols = num_cls_cols
+
+        icl_dim = d_model * num_cls_cols
+
+        self.proj_x = nn.Linear(feature_group_size, d_model)
+
+        # Labels are injected both before the column transformer and before ICL
+        self.proj_y = nn.Linear(1, d_model)
+        self.proj_y_icl = nn.Linear(1, icl_dim)
+
+        self.col_blocks = nn.ModuleList(
+            InducedTransformerBlock(
+                d_model=d_model,
+                num_heads=num_heads_col,
+                num_inducing=num_inducing,
+                mlp_ratio=4.0,
+                dropout=0.0,
+            )
+            for _ in range(num_col_blocks)
+        )
+
+        self.row_blocks = nn.ModuleList(
+            TransformerBlock(
+                d_model=d_model,
+                num_heads=num_heads_row,
+                mlp_ratio=4.0,
+                dropout=0.0,
+            )
+            for _ in range(num_row_blocks)
+        )
+
+        self.icl_blocks = nn.ModuleList(
+            TransformerBlock(
+                d_model=icl_dim,
+                num_heads=num_heads_icl,
+                mlp_ratio=4.0,
+                dropout=0.0,
+            )
+            for _ in range(num_icl_blocks)
+        )
+
+        # These tokens will summarize the features of each row, the paper uses 4 CLS tokens
+        self.row_cls_tokens = nn.Parameter(
+            0.02 * torch.randn(1, 1, num_cls_cols, d_model)
+        )
+
+        self.row_norm = nn.LayerNorm(d_model)
+        self.out_norm = nn.LayerNorm(icl_dim)
+        self.out_mlp = nn.Sequential(
+            nn.Linear(icl_dim, icl_dim * 2),
+            nn.GELU(),
+            nn.Linear(icl_dim * 2, out_dim),
+        )
+
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        batch_size, num_rows, num_cols = x.shape
+        y_batch_size, num_train = y.shape
+
+        if y_batch_size != batch_size:
+            raise ValueError(
+                f"Batch-size mismatch: x has {batch_size}, y has {y_batch_size}."
+            )
+
+        # Normalization, use only the training rows for statistics (ofc)
+        x = (x - x[:, :num_train].mean(dim=1, keepdim=True)) / (
+            x[:, :num_train].std(dim=1, unbiased=False, keepdim=True) + 1e-8
+        )
+
+        # Feature grouping
+        idxs = torch.arange(num_cols, dtype=torch.long, device=x.device)
+        x = torch.stack(
+            [
+                x[:, :, (idxs + (2**i - 1)) % num_cols]
+                for i in range(self.feature_group_size)
+            ],
+            dim=-1,
+        )
+
+        # Embedding and label injection
+        x_proj = self.proj_x(x)
+        x_proj[:, :num_train] += self.proj_y(y[:, :, None, None])
+
+        # Column attention
+        ## Reshape for column attention
+        x_proj = x_proj.permute(0, 2, 1, 3).reshape(
+            batch_size * num_cols,
+            num_rows,
+            -1,
+        )
+
+        for block in self.col_blocks:
+            # All rows are queried, but the inducing tokens summarize training rows only
+            train_context = x_proj[:, :num_train]
+            x_proj = block(x_proj, train_context)
+
+        ## Reshape back
+        x_proj = x_proj.reshape(
+            batch_size,
+            num_cols,
+            num_rows,
+            -1,
+        ).permute(0, 2, 1, 3)
+
+        # Row attention
+        ## Add learnable tokens that will summarize each row
+        x_proj = torch.cat(
+            [self.row_cls_tokens.expand(batch_size, num_rows, -1, -1), x_proj],
+            dim=2,
+        )
+
+        ## Reshape for row attention
+        num_tokens = self.num_cls_cols + num_cols
+        x_proj = x_proj.reshape(
+            batch_size * num_rows,
+            num_tokens,
+            -1,
+        )
+
+        for block in self.row_blocks[:-1]:
+            x_proj = block(x_proj)
+
+        ## In the last block, only the CLS tokens need updated representations
+        cls_queries = x_proj[:, : self.num_cls_cols]
+        x_proj = self.row_blocks[-1](cls_queries, x_proj)
+
+        ## Reshape back
+        x_proj = x_proj.reshape(
+            batch_size,
+            num_rows,
+            self.num_cls_cols,
+            -1,
+        )
+
+        ## Concatenate the CLS tokens into one fixed-size row representation
+        x_proj = self.row_norm(x_proj).flatten(-2, -1)
+
+        # ICL attention
+        ## Inject labels again at the dimension used by the ICL transformer
+        x_proj[:, :num_train] += self.proj_y_icl(y[:, :, None])
+
+        for block in self.icl_blocks[:-1]:
+            # Every row is queried, but only training rows provide keys and values
+            x_proj = block(
+                x_proj,
+                x_proj[:, :num_train],
+            )
+
+        ## The final block only computes representations for the test rows
+        x_proj = self.icl_blocks[-1](
+            x_proj[:, num_train:],
+            x_proj[:, :num_train],
+        )
+
+        # Output projection
+        return self.out_mlp(self.out_norm(x_proj))
+
+
+if __name__ == "__main__":
+    torch.manual_seed(0)
+
+    batch_size = 2
+    num_train = 16
+    num_test = 8
+    num_cols = 5
+    out_dim = 1
+
+    model = TinyTabICL(
+        out_dim=out_dim,
+        d_model=32,
+    )
+
+    x = torch.randn(batch_size, num_train + num_test, num_cols)
+    y = torch.randn(batch_size, num_train)
+
+    predictions = model(x, y)
+
+    expected_shape = (batch_size, num_test, out_dim)
+    assert predictions.shape == expected_shape, (
+        f"Expected shape {expected_shape}, got {predictions.shape}."
+    )
+
+    loss = predictions.square().mean()
+    loss.backward()
