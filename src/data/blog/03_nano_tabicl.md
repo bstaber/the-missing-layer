@@ -156,116 +156,223 @@ That's it for the principal architecture: feature grouping, induced column atten
 
 # Implementation
 
-## Column attention with inducing points
-
-As described above, the column attention block is implemented as a Transformer block with inducing points. The following code snippet shows how to implement this block in PyTorch.
+The aim is obtain a model that we can create as follows:
 
 ```python
-class InducedTransformerBlock(nn.Module):
-    """Transformer block with induced tokens."""
+model = TinyTabICL(out_dim=1, d_model=128)
+```
+
+Given a batch of datasets, the model can be called with:
+
+```python
+y_pred = model(X, y)
+```
+
+where `X` contains the train and test rows, while `y` only contain the train rows. The model uses the labeled training rows as context and returns predictions for the test rows. More precisely:
+
+- `X`:      `(batch_size, num_train + num_test, num_features)`
+- `y`:      `(batch_size, num_train)`
+- `y_pred`: `(batch_size, num_test, out_dim)`
+
+For scalar regression, we set out_dim=1. The model can be implemented as an nn.Module with the following interface:
+
+```python
+class TinyTabICL(nn.Module):
+    """Tiny squeezy TabICL model."""
 
     def __init__(
         self,
-        d_model: int,
-        num_heads: int,
-        num_inducing: int,
-        mlp_ratio: float,
-        dropout: float = 0.0,
+        out_dim: int,
+        d_model: int = 128,
+        num_heads_col: int = 8,
+        num_heads_row: int = 8,
+        num_heads_icl: int = 8,
+        num_col_blocks: int = 3,
+        num_row_blocks: int = 3,
+        num_icl_blocks: int = 3,
+        num_inducing: int = 128,
+        num_cls_cols: int = 4,
+        feature_group_size: int = 3,
     ):
         super().__init__()
+        ...
 
-        # Learnable inducing tokens / queries that summarize the input sequence
-        self.inducing_tokens = nn.Parameter(
-            0.02 * torch.randn(1, num_inducing, d_model)
-        )
-
-        # Transformer block that compresses the input sequence by attending to the inducing tokens
-        self.compress_block = TransformerBlock(
-            d_model,
-            num_heads,
-            mlp_ratio,
-            dropout,
-        )
-
-        # Transformer block that decompresses to the original sequence length
-        self.decompress_block = TransformerBlock(
-            d_model,
-            num_heads,
-            mlp_ratio,
-            dropout,
-        )
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        context: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """Forward pass of the induced transformer block."""
-        batch_size = x.shape[0]
-
-        q = self.inducing_tokens.expand(batch_size, -1, -1)
-        source = context if context is not None else x
-
-        # q: (batch_size, num_inducing, d_model)
-        # source: (batch_size, seq_len, d_model)
-        # z: (batch_size, num_inducing, d_model)
-        z = self.compress_block(q, source)
-
-        # z: (batch_size, num_inducing, d_model)
-        # x: (batch_size, seq_len, d_model)
-        # out: (batch_size, seq_len, d_model)
-        out = self.decompress_block(x, z)
-
-        return out
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor: 
+        ...
 ```
 
-## Row and ICL attention
+The main hyperparameter is d_model, which controls the dimension of the feature representations throughout the column and row transformers. For each stage (column attention, row attention, and ICL attention) we specify both the number of Transformer blocks and the number of attention heads.
 
-Row attention is implemented as a standard Transformer block. The ICL attention is also implemented as a Transformer block, but it can optionally take a context tensor to perform cross-attention. The following code snippet shows how to implement these blocks in PyTorch.
+The remaining parameters control architecture-specific details:
+- `num_inducing` is the number of learnable inducing tokens used by the column transformer
+- `num_cls_cols` is the number of learnable `[CLS]` tokens prepended to each row before row attention. 
+- `feature_group_size` determines how many feature values are grouped together before the initial linear projection.
+
+## Forward pass
+
+I would like to go through the forward method step by step, sequentially. Let's start with this:
 
 ```python
-class TransformerBlock(nn.Module):
-    """Classic transformer block with optional cross attention."""
+def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    batch_size, num_rows, num_cols = x.shape
+    y_batch_size, num_train = y.shape
 
-    def __init__(
-        self,
-        d_model: int,
-        num_heads: int,
-        mlp_ratio: float,
-        dropout: float = 0.0,
-    ):
-        super().__init__()
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
-        self.attn = nn.MultiheadAttention(d_model, num_heads, dropout, batch_first=True)
-
-        hidden_dim = int(mlp_ratio * d_model)
-        self.ffn = nn.Sequential(
-            nn.Linear(d_model, hidden_dim), nn.GELU(), nn.Linear(hidden_dim, d_model)
+    if y_batch_size != batch_size:
+        raise ValueError(
+            f"Batch-size mismatch: x has {batch_size}, y has {y_batch_size}."
         )
 
-    def forward(
-        self, x: torch.Tensor, context: torch.Tensor | None = None
-    ) -> torch.Tensor:
-        q = self.norm1(x)
+    # input preprocessing
+    ...
 
-        if context is None:
-            kv = q
-        else:
-            kv = self.norm1(context)
+    # input embedding
+    ...
 
-        attn_output, _ = self.attn(
-            q,
-            kv,
-            kv,
-            need_weights=False,
-        )
-        x = x + attn_output
+    # column attention
+    ...
 
-        x = x + self.ffn(self.norm2(x))
-        return x
+    # row attention
+    ...
+
+    # ICL attention
+    ...
+
+    # output projection
+    ...
 ```
 
+### Input preprocessing
+
+The input preprocessing step consists of normalizing the features and applying the feature-grouping strategy. I took both operations directly from the NanoTabICL implementation.
+
+The features are standardized using statistics computed from the training rows only:
+
+```python
+x = (x - x[:, :num_train].mean(dim=1, keepdim=True)) / (
+    x[:, :num_train].std(dim=1, unbiased=False, keepdim=True) + 1e-8
+)
+```
+
+The mean and standard deviation are computed independently for every dataset and every feature.
+
+We then apply feature grouping:
+
+```python
+idxs = torch.arange(num_cols, dtype=torch.long, device=x.device)
+x = torch.stack(
+    [
+        x[:, :, (idxs + (2**i - 1)) % num_cols]
+        for i in range(self.feature_group_size)
+    ],
+    dim=-1,
+)
+```
+
+Before this operation, x has shape `(batch_size, num_rows, num_cols)`. After feature grouping, its shape becomes `(batch_size, num_rows, num_cols, feature_group_size)`.
+
+### Input embedding
+
+Each feature group is then projected into the model embedding space:
+
+```python
+x_proj = self.proj_x(x)
+```
+
+The resulting tensor has shape `(batch, rows, columns, d_model)`. The labels are embedded separately and added only to the training-row representations:
+
+```python
+x_proj[:, :num_train] += self.proj_y(y[:, :, None, None])
+```
+
+The two singleton dimensions are added so that the label embedding can be broadcast across all columns of the corresponding row. The test rows receive no label information.
+
+### Column attention
+
+Column attention processes each column as an independent sequence over the rows. We therefore move the column dimension next to the batch dimension and merge both dimensions:
+
+```python
+x_proj = x_proj.permute(0, 2, 1, 3).reshape(
+    batch_size * num_cols,
+    num_rows,
+    -1,
+)
+```
+
+The shape changes from `(batch, rows, columns, d_model)` to `(batch * columns, rows, d_model)`. The induced Transformer blocks are then applied:
+
+```python
+for block in self.col_blocks:
+    train_context = x_proj[:, :num_train]
+    x_proj = block(x_proj, train_context)
+```
+
+All rows are used as queries, but the inducing tokens summarize only the training rows. Consequently, the test rows can retrieve information from the training context without contributing to it.
+
+After the column blocks, we restore the original table layout:
+
+```python
+x_proj = x_proj.reshape(
+    batch_size,
+    num_cols,
+    num_rows,
+    -1,
+).permute(0, 2, 1, 3)
+```
+
+The tensor once again has shape `(batch, rows, columns, d_model)`.
+
+### Row attention
+
+Before applying row attention, we prepend the learnable [CLS] tokens to every row:
+
+```python
+x_proj = torch.cat(
+    [self.row_cls_tokens.expand(batch_size, num_rows, -1, -1), x_proj],
+    dim=2,
+)
+```
+
+These tokens are inserted along the column dimension and will be used to summarize the feature representations of each row. We then merge the batch and row dimensions so that each row becomes an independent sequence:
+
+```python
+num_tokens = self.num_cls_cols + num_cols
+x_proj = x_proj.reshape(
+    batch_size * num_rows,
+    num_tokens,
+    -1,
+)
+```
+
+The intermediate row blocks apply ordinary self-attention to all feature and [CLS] tokens:
+
+```python
+for block in self.row_blocks[:-1]:
+    x_proj = block(x_proj)
+```
+
+In the final row block, only the [CLS] tokens are used as queries:
+
+```python
+cls_queries = x_proj[:, : self.num_cls_cols]
+x_proj = self.row_blocks[-1](cls_queries, x_proj)
+```
+
+Finally, we restore the table dimensions and concatenate the [CLS] representations:
+
+```python
+x_proj = x_proj.reshape(
+    batch_size,
+    num_rows,
+    self.num_cls_cols,
+    -1,
+)
+
+x_proj = self.row_norm(x_proj).flatten(-2, -1)
+```
+
+### ICL attention
+
+TBD.
 
 # Training this tiny TabICL with my own prior data
 
