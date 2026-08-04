@@ -241,6 +241,8 @@ def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     ...
 ```
 
+The complete implementation is given in the sequel of this section.
+
 ### Input preprocessing
 
 The input preprocessing step consists of normalizing the features and applying the feature-grouping strategy. I took both operations directly from the NanoTabICL implementation.
@@ -372,7 +374,342 @@ x_proj = self.row_norm(x_proj).flatten(-2, -1)
 
 ### ICL attention
 
-TBD.
+Before the ICL Transformer, the training labels are embedded a second time, now directly in the ICL embedding space:
+
+```python
+x_proj[:, :num_train] += self.proj_y_icl(y[:, :, None])
+```
+
+The intermediate ICL blocks update every row, but only the training rows are used as keys and values:
+
+```python
+for block in self.icl_blocks[:-1]:
+    x_proj = block(
+        x_proj,
+        x_proj[:, :num_train],
+    )
+```
+
+The final ICL block is asymmetric. Only the test rows are used as queries, while the training rows provide the context:
+
+```python
+x_proj = self.icl_blocks[-1](
+    x_proj[:, num_train:],
+    x_proj[:, :num_train],
+)
+```
+
+The final normalization and MLP map these representations to predictions:
+
+```python
+return self.out_mlp(self.out_norm(x_proj))
+```
+
+## Complete implementation
+
+The complete tiny squeezy TabICL v2 model is shown below. You can find all the steps discussed above in the forward method.
+
+This version omits some implementation details from TabICLv2, such as QASSMax, RoPE and the classification-specific embeddings, in order to focus on the core architecture.
+
+<details>
+<summary>TinyTabICL model implementation (click to expand)</summary>
+
+```python
+import torch
+import torch.nn as nn
+
+class TinyTabICL(nn.Module):
+    """Tiny squeezy TabICL model."""
+
+    def __init__(
+        self,
+        out_dim: int,
+        d_model: int = 128,
+        num_heads_col: int = 8,
+        num_heads_row: int = 8,
+        num_heads_icl: int = 8,
+        num_col_blocks: int = 3,
+        num_row_blocks: int = 3,
+        num_icl_blocks: int = 3,
+        num_inducing: int = 128,
+        num_cls_cols: int = 4,
+        feature_group_size: int = 3,
+    ):
+        super().__init__()
+        self.feature_group_size = feature_group_size
+        self.num_cls_cols = num_cls_cols
+
+        icl_dim = d_model * num_cls_cols
+
+        self.proj_x = nn.Linear(feature_group_size, d_model)
+
+        # Labels are injected both before the column transformer and before ICL
+        self.proj_y = nn.Linear(1, d_model)
+        self.proj_y_icl = nn.Linear(1, icl_dim)
+
+        self.col_blocks = nn.ModuleList(
+            InducedTransformerBlock(
+                d_model=d_model,
+                num_heads=num_heads_col,
+                num_inducing=num_inducing,
+                mlp_ratio=4.0,
+                dropout=0.0,
+            )
+            for _ in range(num_col_blocks)
+        )
+
+        self.row_blocks = nn.ModuleList(
+            TransformerBlock(
+                d_model=d_model,
+                num_heads=num_heads_row,
+                mlp_ratio=4.0,
+                dropout=0.0,
+            )
+            for _ in range(num_row_blocks)
+        )
+
+        self.icl_blocks = nn.ModuleList(
+            TransformerBlock(
+                d_model=icl_dim,
+                num_heads=num_heads_icl,
+                mlp_ratio=4.0,
+                dropout=0.0,
+            )
+            for _ in range(num_icl_blocks)
+        )
+
+        # These tokens will summarize the features of each row, the paper uses 4 CLS tokens
+        self.row_cls_tokens = nn.Parameter(
+            0.02 * torch.randn(1, 1, num_cls_cols, d_model)
+        )
+
+        self.row_norm = nn.LayerNorm(d_model)
+        self.out_norm = nn.LayerNorm(icl_dim)
+        self.out_mlp = nn.Sequential(
+            nn.Linear(icl_dim, icl_dim * 2),
+            nn.GELU(),
+            nn.Linear(icl_dim * 2, out_dim),
+        )
+
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        batch_size, num_rows, num_cols = x.shape
+        y_batch_size, num_train = y.shape
+
+        if y_batch_size != batch_size:
+            raise ValueError(
+                f"Batch-size mismatch: x has {batch_size}, y has {y_batch_size}."
+            )
+
+        # Normalization, use only the training rows for statistics (ofc)
+        x = (x - x[:, :num_train].mean(dim=1, keepdim=True)) / (
+            x[:, :num_train].std(dim=1, unbiased=False, keepdim=True) + 1e-8
+        )
+
+        # Feature grouping
+        idxs = torch.arange(num_cols, dtype=torch.long, device=x.device)
+        x = torch.stack(
+            [
+                x[:, :, (idxs + (2**i - 1)) % num_cols]
+                for i in range(self.feature_group_size)
+            ],
+            dim=-1,
+        )
+
+        # Embedding and label injection
+        x_proj = self.proj_x(x)
+        x_proj[:, :num_train] += self.proj_y(y[:, :, None, None])
+
+        # Column attention
+        ## Reshape for column attention
+        x_proj = x_proj.permute(0, 2, 1, 3).reshape(
+            batch_size * num_cols,
+            num_rows,
+            -1,
+        )
+
+        for block in self.col_blocks:
+            # All rows are queried, but the inducing tokens summarize training rows only
+            train_context = x_proj[:, :num_train]
+            x_proj = block(x_proj, train_context)
+
+        ## Reshape back
+        x_proj = x_proj.reshape(
+            batch_size,
+            num_cols,
+            num_rows,
+            -1,
+        ).permute(0, 2, 1, 3)
+
+        # Row attention
+        ## Add learnable tokens that will summarize each row
+        x_proj = torch.cat(
+            [self.row_cls_tokens.expand(batch_size, num_rows, -1, -1), x_proj],
+            dim=2,
+        )
+
+        ## Reshape for row attention
+        num_tokens = self.num_cls_cols + num_cols
+        x_proj = x_proj.reshape(
+            batch_size * num_rows,
+            num_tokens,
+            -1,
+        )
+
+        for block in self.row_blocks[:-1]:
+            x_proj = block(x_proj)
+
+        ## In the last block, only the CLS tokens need updated representations
+        cls_queries = x_proj[:, : self.num_cls_cols]
+        x_proj = self.row_blocks[-1](cls_queries, x_proj)
+
+        ## Reshape back
+        x_proj = x_proj.reshape(
+            batch_size,
+            num_rows,
+            self.num_cls_cols,
+            -1,
+        )
+
+        ## Concatenate the CLS tokens into one fixed-size row representation
+        x_proj = self.row_norm(x_proj).flatten(-2, -1)
+
+        # ICL attention
+        ## Inject labels again at the dimension used by the ICL transformer
+        x_proj[:, :num_train] += self.proj_y_icl(y[:, :, None])
+
+        for block in self.icl_blocks[:-1]:
+            # Every row is queried, but only training rows provide keys and values
+            x_proj = block(
+                x_proj,
+                x_proj[:, :num_train],
+            )
+
+        ## The final block only computes representations for the test rows
+        x_proj = self.icl_blocks[-1](
+            x_proj[:, num_train:],
+            x_proj[:, :num_train],
+        )
+
+        # Output projection
+        return self.out_mlp(self.out_norm(x_proj))
+```
+</details>
+
+<details>
+<summary>Transformer block implementation (click to expand)</summary>
+
+```python
+import torch
+import torch.nn as nn
+
+
+class TransformerBlock(nn.Module):
+    """Classic transformer block with optional cross attention."""
+
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        mlp_ratio: float,
+        dropout: float = 0.0,
+    ):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.attn = nn.MultiheadAttention(d_model, num_heads, dropout, batch_first=True)
+
+        hidden_dim = int(mlp_ratio * d_model)
+        self.ffn = nn.Sequential(
+            nn.Linear(d_model, hidden_dim), nn.GELU(), nn.Linear(hidden_dim, d_model)
+        )
+
+    def forward(
+        self, x: torch.Tensor, context: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        q = self.norm1(x)
+
+        if context is None:
+            kv = q
+        else:
+            kv = self.norm1(context)
+
+        attn_output, _ = self.attn(
+            q,
+            kv,
+            kv,
+            need_weights=False,
+        )
+        x = x + attn_output
+
+        x = x + self.ffn(self.norm2(x))
+        return x
+```
+</details>
+
+<details>
+<summary>Induced Transformer block implementation (click to expand)</summary>
+
+```python
+class InducedTransformerBlock(nn.Module):
+    """Transformer block with induced tokens."""
+
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        num_inducing: int,
+        mlp_ratio: float,
+        dropout: float = 0.0,
+    ):
+        super().__init__()
+
+        # Learnable inducing tokens / queries that summarize the input sequence
+        self.inducing_tokens = nn.Parameter(
+            0.02 * torch.randn(1, num_inducing, d_model)
+        )
+
+        # Transformer block that compresses the input sequence by attending to the inducing tokens
+        self.compress_block = TransformerBlock(
+            d_model,
+            num_heads,
+            mlp_ratio,
+            dropout,
+        )
+
+        # Transformer block that decompresses to the original sequence length
+        self.decompress_block = TransformerBlock(
+            d_model,
+            num_heads,
+            mlp_ratio,
+            dropout,
+        )
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        context: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Forward pass of the induced transformer block."""
+        batch_size = x.shape[0]
+
+        q = self.inducing_tokens.expand(batch_size, -1, -1)
+        source = context if context is not None else x
+
+        # q: (batch_size, num_inducing, d_model)
+        # source: (batch_size, seq_len, d_model)
+        # z: (batch_size, num_inducing, d_model)
+        z = self.compress_block(q, source)
+
+        # z: (batch_size, num_inducing, d_model)
+        # x: (batch_size, seq_len, d_model)
+        # out: (batch_size, seq_len, d_model)
+        out = self.decompress_block(x, z)
+
+        return out
+```
+</details>
+
+We can now train this model on some prior data.
 
 # Training this tiny TabICL with my own prior data
 
